@@ -5,6 +5,7 @@ import { useUser } from '@/components/UserContext';
 import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown, FadeInUp, SlideInRight } from 'react-native-reanimated';
+import { DateUtils } from '@/lib/dateUtils';
 
 const { width } = Dimensions.get('window');
 
@@ -255,10 +256,10 @@ export default function DashboardContent() {
               >
                 <View style={styles.entryDate}>
                   <Text style={styles.entryDateDay}>
-                    {new Date(entry.created_at).getDate()}
+                    {DateUtils.parseLocalDate(entry.date).getDate()}
                   </Text>
                   <Text style={styles.entryDateMonth}>
-                    {new Date(entry.created_at).toLocaleDateString('en-US', { month: 'short' })}
+                    {DateUtils.parseLocalDate(entry.date).toLocaleDateString('en-US', { month: 'short' })}
                   </Text>
                 </View>
                 <View style={styles.entryMoodContainer}>
@@ -312,13 +313,7 @@ export default function DashboardContent() {
 
 // Helper functions
 function getThisWeekEntries(entries: any[]) {
-  const now = new Date();
-  const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
-  startOfWeek.setHours(0, 0, 0, 0);
-  
-  return entries.filter(entry => 
-    new Date(entry.created_at) >= startOfWeek
-  );
+  return entries.filter(entry => DateUtils.isThisWeek(entry.date));
 }
 
 function getHabitStats(entries: any[]) {
@@ -355,19 +350,16 @@ function getStreakCount(entries: any[]): number {
   if (entries.length === 0) return 0;
   
   let streak = 0;
-  const today = new Date();
+  let checkDate = DateUtils.getCurrentLocalDate();
   
+  // Check consecutive days starting from today
   for (let i = 0; i < 30; i++) {
-    const checkDate = new Date(today);
-    checkDate.setDate(today.getDate() - i);
-    
-    const hasEntry = entries.some(entry => {
-      const entryDate = new Date(entry.created_at);
-      return entryDate.toDateString() === checkDate.toDateString();
-    });
+    const hasEntry = entries.some(entry => entry.date === checkDate);
     
     if (hasEntry) {
       streak++;
+      // Move to previous day
+      checkDate = DateUtils.getDaysAgo(i + 1);
     } else {
       break;
     }

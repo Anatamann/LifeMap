@@ -1,971 +1,326 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, Dimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useEffect } from 'react';
-import { X, Check, Sparkles, Target, Lightbulb, Heart } from 'lucide-react-native';
+import { X, Save, Calendar, Heart, Target, Sparkles } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useUser } from '@/components/UserContext';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { FadeInDown, FadeInUp, SlideInRight, useSharedValue, useAnimatedStyle, withSpring, withTiming, runOnJS } from 'react-native-reanimated';
+import Animated, { FadeInDown, FadeInUp, SlideInRight } from 'react-native-reanimated';
+import { DateUtils } from '@/lib/dateUtils';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
-const moodOptions = [
-  { value: 1, emoji: '😞', label: 'Very Bad', color: '#ef4444', description: 'Struggling today' },
-  { value: 2, emoji: '😔', label: 'Bad', color: '#f97316', description: 'Not my best day' },
-  { value: 3, emoji: '😐', label: 'Okay', color: '#eab308', description: 'Getting by' },
-  { value: 4, emoji: '😊', label: 'Good', color: '#22c55e', description: 'Feeling positive' },
-  { value: 5, emoji: '😄', label: 'Excellent', color: '#10b981', description: 'Amazing day!' },
-];
+const moodEmojis = ['😞', '😔', '😐', '😊', '😄'];
+const moodLabels = ['Very Sad', 'Sad', 'Neutral', 'Happy', 'Very Happy'];
 
 const defaultHabits = [
-  { name: 'Exercise', icon: '💪', color: '#ef4444', description: 'Physical activity' },
-  { name: 'Meditation', icon: '🧘', color: '#8b5cf6', description: 'Mindfulness practice' },
-  { name: 'Reading', icon: '📚', color: '#3b82f6', description: 'Learning & growth' },
-  { name: 'Healthy Eating', icon: '🥗', color: '#10b981', description: 'Nutritious meals' },
-  { name: 'Early Sleep', icon: '😴', color: '#6366f1', description: 'Quality rest' },
-  { name: 'Gratitude', icon: '🙏', color: '#f59e0b', description: 'Appreciation practice' },
+  'Exercise',
+  'Meditation',
+  'Reading',
+  'Healthy Eating',
+  'Early Sleep',
+  'Gratitude Practice',
+  'Learning',
+  'Social Connection'
 ];
-
-const journalPrompts = [
-  "What decision challenged me the most today?",
-  "What am I most grateful for right now?",
-  "How did I grow as a person today?",
-  "What would I do differently if I could?",
-  "What brought me the most joy today?",
-  "What lesson did today teach me?",
-];
-
-// Helper function to format date consistently
-const formatDateForDatabase = (date: Date): string => {
-  return date.toISOString().split('T')[0]; // Returns YYYY-MM-DD format
-};
 
 export default function EntryContent() {
-  const { addEntry, updateEntry, getTodaysEntry } = useUser();
-  const [selectedMood, setSelectedMood] = useState<number | null>(null);
-  const [decision, setDecision] = useState('');
-  const [habits, setHabits] = useState<{ [key: string]: boolean }>({
-    'Exercise': false,
-    'Meditation': false,
-    'Reading': false,
-    'Healthy Eating': false,
-    'Early Sleep': false,
-    'Gratitude': false,
+  const { addEntry, updateEntry, getTodaysEntry, subscription } = useUser();
+  
+  // Get today's entry if it exists
+  const existingEntry = getTodaysEntry();
+  const isEditing = !!existingEntry;
+  
+  // Form state
+  const [mood, setMood] = useState(existingEntry?.mood || 3);
+  const [decision, setDecision] = useState(existingEntry?.decision || '');
+  const [habits, setHabits] = useState<{ [key: string]: boolean }>(() => {
+    if (existingEntry?.habits && typeof existingEntry.habits === 'object') {
+      return existingEntry.habits as { [key: string]: boolean };
+    }
+    return defaultHabits.reduce((acc, habit) => ({ ...acc, [habit]: false }), {});
   });
-  const [currentPrompt] = useState(journalPrompts[Math.floor(Math.random() * journalPrompts.length)]);
-  const [isSaving, setIsSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const progressValue = useSharedValue(0);
-  const selectedMoodData = moodOptions.find(mood => mood.value === selectedMood);
-
-  // Get today's entry
-  const todaysEntry = getTodaysEntry();
-  const isEditing = !!todaysEntry;
-
-  // Initialize form with existing entry data if editing
-  useEffect(() => {
-    if (todaysEntry) {
-      setSelectedMood(todaysEntry.mood);
-      setDecision(todaysEntry.decision);
-      
-      // Parse habits safely
-      const entryHabits = todaysEntry.habits as { [key: string]: boolean } | null;
-      if (entryHabits && typeof entryHabits === 'object') {
-        setHabits(prev => ({
-          ...prev,
-          ...entryHabits
-        }));
-      }
-    }
-  }, [todaysEntry]);
-
-  // Haptic feedback function
-  const triggerHapticFeedback = () => {
-    if (Platform.OS !== 'web') {
-      // Would use Haptics.impactAsync() on native platforms
-    }
-  };
-
-  const handleHabitPress = (habit: string) => {
-    // Immediately update the state for better responsiveness
-    setHabits(prev => ({
-      ...prev,
-      [habit]: !prev[habit],
-    }));
-    // Trigger haptic feedback after state update
-    triggerHapticFeedback();
-  };
-
-  const selectMood = (moodValue: number) => {
-    triggerHapticFeedback();
-    setSelectedMood(moodValue);
-  };
+  const canSave = decision.trim().length > 0;
+  const todayDate = DateUtils.getCurrentLocalDate();
 
   const handleSave = async () => {
-    if (!selectedMood || !decision.trim()) {
-      Alert.alert('Missing Information', 'Please select your mood and write about your day.');
+    if (!canSave) {
+      Alert.alert('Missing Information', 'Please write about your day before saving.');
       return;
     }
 
-    setIsSaving(true);
+    // Check subscription limits for new entries
+    if (!isEditing && subscription.plan === 'free' && subscription.entriesThisMonth >= subscription.maxEntriesPerMonth) {
+      Alert.alert(
+        'Monthly Limit Reached',
+        `You've reached your monthly limit of ${subscription.maxEntriesPerMonth} entries. Upgrade to Pro for unlimited entries and AI insights.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Upgrade to Pro', onPress: () => router.push('/paywall') }
+        ]
+      );
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const entryData = {
-        mood: selectedMood,
-        moodEmoji: selectedMoodData?.emoji || '😐',
+        mood,
+        moodEmoji: moodEmojis[mood - 1],
         decision: decision.trim(),
-        habits: habits,
+        habits,
       };
 
       let result;
-      
-      if (isEditing && todaysEntry) {
-        // Update existing entry
-        console.log('Updating existing entry:', todaysEntry.id);
-        result = await updateEntry(todaysEntry.id, entryData);
+      if (isEditing) {
+        result = await updateEntry(existingEntry.id, entryData);
       } else {
-        // Create new entry
-        console.log('Creating new entry for today');
-        const todayDateString = formatDateForDatabase(new Date());
         result = await addEntry({
-          date: todayDateString,
+          date: todayDate,
           ...entryData,
         });
       }
 
       if (result.error) {
-        console.error('Save error:', result.error);
-        Alert.alert('Error', `Failed to ${isEditing ? 'update' : 'save'} entry: ${result.error}`);
+        Alert.alert('Error', result.error);
       } else {
-        console.log('Entry saved successfully:', result.data);
-        
-        // Show success message and navigate back
         Alert.alert(
-          'Success!', 
-          `Your journal entry has been ${isEditing ? 'updated' : 'saved'} successfully!`, 
-          [
-            { 
-              text: 'OK', 
-              onPress: () => {
-                // Navigate back to the home screen (tabs)
-                router.replace('/(tabs)');
-              }
-            }
-          ]
+          'Success!',
+          isEditing ? 'Your entry has been updated.' : 'Your entry has been saved.',
+          [{ text: 'OK', onPress: () => router.back() }]
         );
       }
     } catch (error) {
-      console.error('Unexpected error saving entry:', error);
       Alert.alert('Error', 'An unexpected error occurred. Please try again.');
     } finally {
-      setIsSaving(false);
+      setLoading(false);
     }
   };
 
-  const completedHabits = Object.values(habits).filter(Boolean).length;
-  const totalFields = 3; // mood, decision, habits
-  const completedFields = (selectedMood ? 1 : 0) + (decision.trim() ? 1 : 0) + (completedHabits > 0 ? 1 : 0);
-  const progress = completedFields / totalFields;
-
-  const progressStyle = useAnimatedStyle(() => {
-    return {
-      width: withSpring(`${progress * 100}%`),
-    };
-  });
-
-  // Enhanced responsive calculations with better breakpoints
-  const isTablet = width >= 768;
-  const isLargeTablet = width >= 1024;
-  const isSmallMobile = width < 375;
-  const isMobile = width < 768;
-  
-  // Perfect mood layout calculations for all screen sizes
-  const getMoodLayout = () => {
-    if (isLargeTablet) {
-      // Large tablets (iPad Pro): Single row with generous spacing
-      return {
-        layout: 'single-row',
-        itemsPerRow: 5,
-        itemWidth: Math.min((width - 160) / 5 - 16, 180), // Max width 180px with gaps
-        containerPadding: 60,
-        itemSpacing: 16,
-        minHeight: 200,
-      };
-    } else if (isTablet) {
-      // Regular tablets (iPad): Single row with good spacing
-      return {
-        layout: 'single-row',
-        itemsPerRow: 5,
-        itemWidth: Math.min((width - 120) / 5 - 12, 160), // Max width 160px with gaps
-        containerPadding: 40,
-        itemSpacing: 12,
-        minHeight: 180,
-      };
-    } else if (isSmallMobile) {
-      // Small phones: 2 columns, 3 rows
-      return {
-        layout: 'grid-2x3',
-        itemsPerRow: 2,
-        itemWidth: (width - 60) / 2 - 8, // Account for padding and gap
-        containerPadding: 20,
-        itemSpacing: 8,
-        minHeight: 110,
-      };
-    } else {
-      // Regular mobile: 3 columns, 2 rows
-      return {
-        layout: 'grid-3x2',
-        itemsPerRow: 3,
-        itemWidth: (width - 60) / 3 - 8, // Account for padding and gap
-        containerPadding: 20,
-        itemSpacing: 8,
-        minHeight: 130,
-      };
-    }
+  const toggleHabit = (habit: string) => {
+    setHabits(prev => ({
+      ...prev,
+      [habit]: !prev[habit]
+    }));
   };
 
-  const moodLayout = getMoodLayout();
-
-  // Habits layout for different screen sizes
-  const getHabitsLayout = () => {
-    if (isLargeTablet) {
-      return { columns: 3, gap: 20 };
-    } else if (isTablet) {
-      return { columns: 2, gap: 16 };
-    }
-    return { columns: 1, gap: 12 };
-  };
-
-  const habitsLayout = getHabitsLayout();
-
-  // Render mood options based on layout
-  const renderMoodOptions = () => {
-    if (moodLayout.layout === 'single-row') {
-      // Single row for tablets
-      return (
-        <View style={[styles.moodRowSingle, { 
-          paddingHorizontal: moodLayout.containerPadding,
-          gap: moodLayout.itemSpacing 
-        }]}>
-          {moodOptions.map((mood, index) => (
-            <Animated.View 
-              key={mood.value} 
-              entering={SlideInRight.delay(200 + index * 50)} 
-              style={[styles.moodOptionWrapper, { 
-                width: moodLayout.itemWidth,
-                minWidth: moodLayout.itemWidth 
-              }]}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.moodOption,
-                  isLargeTablet ? styles.moodOptionLargeTablet : styles.moodOptionTablet,
-                  { minHeight: moodLayout.minHeight },
-                  selectedMood === mood.value && [
-                    styles.moodOptionSelected,
-                    { 
-                      borderColor: mood.color, 
-                      backgroundColor: `${mood.color}15`,
-                      transform: [{ scale: 1.02 }]
-                    }
-                  ]
-                ]}
-                onPress={() => selectMood(mood.value)}
-              >
-                <Text style={isLargeTablet ? styles.moodEmojiLargeTablet : styles.moodEmojiTablet}>
-                  {mood.emoji}
-                </Text>
-                <Text style={[
-                  isLargeTablet ? styles.moodLabelLargeTablet : styles.moodLabelTablet,
-                  selectedMood === mood.value && { color: mood.color, fontFamily: 'Inter-Bold' }
-                ]}>
-                  {mood.label}
-                </Text>
-                <Text style={isLargeTablet ? styles.moodDescriptionLargeTablet : styles.moodDescriptionTablet}>
-                  {mood.description}
-                </Text>
-                {selectedMood === mood.value && (
-                  <View style={[
-                    styles.moodSelectedIndicator,
-                    isLargeTablet ? styles.moodSelectedIndicatorLargeTablet : styles.moodSelectedIndicatorTablet,
-                    { backgroundColor: mood.color }
-                  ]}>
-                    <Check size={isLargeTablet ? 20 : 16} color="#ffffff" />
-                  </View>
-                )}
-              </TouchableOpacity>
-            </Animated.View>
-          ))}
-        </View>
-      );
-    } else if (moodLayout.layout === 'grid-2x3') {
-      // 2x3 grid for small mobile
-      return (
-        <View style={[styles.moodGridContainer, { paddingHorizontal: moodLayout.containerPadding }]}>
-          {/* First row - 2 items */}
-          <View style={[styles.moodRow, { gap: moodLayout.itemSpacing, marginBottom: moodLayout.itemSpacing }]}>
-            {moodOptions.slice(0, 2).map((mood, index) => (
-              <Animated.View 
-                key={mood.value} 
-                entering={SlideInRight.delay(200 + index * 50)} 
-                style={[styles.moodOptionWrapper, { width: moodLayout.itemWidth }]}
-              >
-                <TouchableOpacity
-                  style={[
-                    styles.moodOption,
-                    styles.moodOptionSmall,
-                    { minHeight: moodLayout.minHeight },
-                    selectedMood === mood.value && [
-                      styles.moodOptionSelected,
-                      { borderColor: mood.color, backgroundColor: `${mood.color}15` }
-                    ]
-                  ]}
-                  onPress={() => selectMood(mood.value)}
-                >
-                  <Text style={styles.moodEmojiSmall}>{mood.emoji}</Text>
-                  <Text style={[
-                    styles.moodLabelSmall,
-                    selectedMood === mood.value && { color: mood.color, fontFamily: 'Inter-SemiBold' }
-                  ]}>
-                    {mood.label}
-                  </Text>
-                  <Text style={styles.moodDescriptionSmall}>{mood.description}</Text>
-                  {selectedMood === mood.value && (
-                    <View style={[styles.moodSelectedIndicator, { backgroundColor: mood.color }]}>
-                      <Check size={12} color="#ffffff" />
-                    </View>
-                  )}
-                </TouchableOpacity>
-              </Animated.View>
-            ))}
-          </View>
-          
-          {/* Second row - 2 items */}
-          <View style={[styles.moodRow, { gap: moodLayout.itemSpacing, marginBottom: moodLayout.itemSpacing }]}>
-            {moodOptions.slice(2, 4).map((mood, index) => (
-              <Animated.View 
-                key={mood.value} 
-                entering={SlideInRight.delay(300 + index * 50)} 
-                style={[styles.moodOptionWrapper, { width: moodLayout.itemWidth }]}
-              >
-                <TouchableOpacity
-                  style={[
-                    styles.moodOption,
-                    styles.moodOptionSmall,
-                    { minHeight: moodLayout.minHeight },
-                    selectedMood === mood.value && [
-                      styles.moodOptionSelected,
-                      { borderColor: mood.color, backgroundColor: `${mood.color}15` }
-                    ]
-                  ]}
-                  onPress={() => selectMood(mood.value)}
-                >
-                  <Text style={styles.moodEmojiSmall}>{mood.emoji}</Text>
-                  <Text style={[
-                    styles.moodLabelSmall,
-                    selectedMood === mood.value && { color: mood.color, fontFamily: 'Inter-SemiBold' }
-                  ]}>
-                    {mood.label}
-                  </Text>
-                  <Text style={styles.moodDescriptionSmall}>{mood.description}</Text>
-                  {selectedMood === mood.value && (
-                    <View style={[styles.moodSelectedIndicator, { backgroundColor: mood.color }]}>
-                      <Check size={12} color="#ffffff" />
-                    </View>
-                  )}
-                </TouchableOpacity>
-              </Animated.View>
-            ))}
-          </View>
-          
-          {/* Third row - 1 item centered */}
-          <View style={[styles.moodRowCenter, { gap: moodLayout.itemSpacing }]}>
-            <Animated.View 
-              entering={SlideInRight.delay(400)} 
-              style={[styles.moodOptionWrapper, { width: moodLayout.itemWidth }]}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.moodOption,
-                  styles.moodOptionSmall,
-                  { minHeight: moodLayout.minHeight },
-                  selectedMood === moodOptions[4].value && [
-                    styles.moodOptionSelected,
-                    { borderColor: moodOptions[4].color, backgroundColor: `${moodOptions[4].color}15` }
-                  ]
-                ]}
-                onPress={() => selectMood(moodOptions[4].value)}
-              >
-                <Text style={styles.moodEmojiSmall}>{moodOptions[4].emoji}</Text>
-                <Text style={[
-                  styles.moodLabelSmall,
-                  selectedMood === moodOptions[4].value && { color: moodOptions[4].color, fontFamily: 'Inter-SemiBold' }
-                ]}>
-                  {moodOptions[4].label}
-                </Text>
-                <Text style={styles.moodDescriptionSmall}>{moodOptions[4].description}</Text>
-                {selectedMood === moodOptions[4].value && (
-                  <View style={[styles.moodSelectedIndicator, { backgroundColor: moodOptions[4].color }]}>
-                    <Check size={12} color="#ffffff" />
-                  </View>
-                )}
-              </TouchableOpacity>
-            </Animated.View>
-          </View>
-        </View>
-      );
-    } else {
-      // 3x2 grid for regular mobile
-      return (
-        <View style={[styles.moodGridContainer, { paddingHorizontal: moodLayout.containerPadding }]}>
-          {/* First row - 3 items */}
-          <View style={[styles.moodRow, { gap: moodLayout.itemSpacing, marginBottom: moodLayout.itemSpacing }]}>
-            {moodOptions.slice(0, 3).map((mood, index) => (
-              <Animated.View 
-                key={mood.value} 
-                entering={SlideInRight.delay(200 + index * 50)} 
-                style={[styles.moodOptionWrapper, { width: moodLayout.itemWidth }]}
-              >
-                <TouchableOpacity
-                  style={[
-                    styles.moodOption,
-                    styles.moodOptionMedium,
-                    { minHeight: moodLayout.minHeight },
-                    selectedMood === mood.value && [
-                      styles.moodOptionSelected,
-                      { borderColor: mood.color, backgroundColor: `${mood.color}15` }
-                    ]
-                  ]}
-                  onPress={() => selectMood(mood.value)}
-                >
-                  <Text style={styles.moodEmojiMedium}>{mood.emoji}</Text>
-                  <Text style={[
-                    styles.moodLabelMedium,
-                    selectedMood === mood.value && { color: mood.color, fontFamily: 'Inter-SemiBold' }
-                  ]}>
-                    {mood.label}
-                  </Text>
-                  <Text style={styles.moodDescriptionMedium}>{mood.description}</Text>
-                  {selectedMood === mood.value && (
-                    <View style={[styles.moodSelectedIndicator, { backgroundColor: mood.color }]}>
-                      <Check size={14} color="#ffffff" />
-                    </View>
-                  )}
-                </TouchableOpacity>
-              </Animated.View>
-            ))}
-          </View>
-          
-          {/* Second row - 2 items centered */}
-          <View style={[styles.moodRowCenter, { gap: moodLayout.itemSpacing }]}>
-            {moodOptions.slice(3, 5).map((mood, index) => (
-              <Animated.View 
-                key={mood.value} 
-                entering={SlideInRight.delay(350 + index * 50)} 
-                style={[styles.moodOptionWrapper, { width: moodLayout.itemWidth }]}
-              >
-                <TouchableOpacity
-                  style={[
-                    styles.moodOption,
-                    styles.moodOptionMedium,
-                    { minHeight: moodLayout.minHeight },
-                    selectedMood === mood.value && [
-                      styles.moodOptionSelected,
-                      { borderColor: mood.color, backgroundColor: `${mood.color}15` }
-                    ]
-                  ]}
-                  onPress={() => selectMood(mood.value)}
-                >
-                  <Text style={styles.moodEmojiMedium}>{mood.emoji}</Text>
-                  <Text style={[
-                    styles.moodLabelMedium,
-                    selectedMood === mood.value && { color: mood.color, fontFamily: 'Inter-SemiBold' }
-                  ]}>
-                    {mood.label}
-                  </Text>
-                  <Text style={styles.moodDescriptionMedium}>{mood.description}</Text>
-                  {selectedMood === mood.value && (
-                    <View style={[styles.moodSelectedIndicator, { backgroundColor: mood.color }]}>
-                      <Check size={14} color="#ffffff" />
-                    </View>
-                  )}
-                </TouchableOpacity>
-              </Animated.View>
-            ))}
-          </View>
-        </View>
-      );
-    }
-  };
+  const completedHabitsCount = Object.values(habits).filter(Boolean).length;
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Enhanced Header with better responsive design */}
-      <Animated.View entering={FadeInUp} style={styles.headerContainer}>
-        <LinearGradient
-          colors={['#667eea', '#764ba2']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.headerGradient}
-        >
-          <View style={[
-            styles.header, 
-            isTablet && styles.headerTablet,
-            isLargeTablet && styles.headerLargeTablet
-          ]}>
-            <TouchableOpacity 
-              onPress={() => router.back()} 
-              style={[
-                styles.closeButton, 
-                isTablet && styles.buttonTablet,
-                isLargeTablet && styles.buttonLargeTablet
-              ]}
-            >
-              <X size={isLargeTablet ? 32 : isTablet ? 28 : 24} color="#ffffff" />
-            </TouchableOpacity>
-            <View style={styles.headerContent}>
-              <Text style={[
-                styles.headerTitle, 
-                isTablet && styles.headerTitleTablet,
-                isLargeTablet && styles.headerTitleLargeTablet
-              ]}>
-                {isEditing ? 'Edit Reflection' : 'Daily Reflection'}
-              </Text>
-              <Text style={[
-                styles.headerSubtitle, 
-                isTablet && styles.headerSubtitleTablet,
-                isLargeTablet && styles.headerSubtitleLargeTablet
-              ]}>
-                {new Date().toLocaleDateString('en-US', { 
-                  weekday: 'long', 
-                  month: 'long', 
-                  day: 'numeric' 
-                })}
-              </Text>
-            </View>
-            <TouchableOpacity 
-              onPress={handleSave} 
-              style={[
-                styles.saveButton, 
-                isTablet && styles.buttonTablet,
-                isLargeTablet && styles.buttonLargeTablet,
-                isSaving && styles.saveButtonDisabled
-              ]}
-              disabled={isSaving}
-            >
-              <Check size={isLargeTablet ? 32 : isTablet ? 28 : 24} color="#ffffff" />
-            </TouchableOpacity>
-          </View>
-          
-          {/* Enhanced Progress Bar */}
-          <View style={[
-            styles.progressContainer, 
-            isTablet && styles.progressContainerTablet,
-            isLargeTablet && styles.progressContainerLargeTablet
-          ]}>
-            <View style={styles.progressBar}>
-              <Animated.View style={[styles.progressFill, progressStyle]} />
-            </View>
-            <View style={styles.progressInfo}>
-              <Text style={[
-                styles.progressText, 
-                isTablet && styles.progressTextTablet,
-                isLargeTablet && styles.progressTextLargeTablet
-              ]}>
-                {Math.round(progress * 100)}% Complete
-              </Text>
-              <Text style={[
-                styles.progressSteps, 
-                isTablet && styles.progressStepsTablet,
-                isLargeTablet && styles.progressStepsLargeTablet
-              ]}>
-                {completedFields}/3 sections
-              </Text>
-            </View>
-          </View>
-        </LinearGradient>
-      </Animated.View>
-
-      <ScrollView 
-        style={styles.content} 
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.scrollContent, 
-          isTablet && styles.scrollContentTablet,
-          isLargeTablet && styles.scrollContentLargeTablet
-        ]}
-      >
-        {/* Enhanced Mood Section with Perfect Responsive Design */}
-        <Animated.View entering={FadeInDown.delay(100)} style={[
-          styles.section, 
-          isTablet && styles.sectionTablet,
-          isLargeTablet && styles.sectionLargeTablet
-        ]}>
-          <View style={styles.sectionHeader}>
-            <Heart size={isLargeTablet ? 28 : isTablet ? 24 : 20} color="#ef4444" />
-            <Text style={[
-              styles.sectionTitle, 
-              isTablet && styles.sectionTitleTablet,
-              isLargeTablet && styles.sectionTitleLargeTablet
-            ]}>
-              How do you feel today?
-            </Text>
-          </View>
-          <Text style={[
-            styles.sectionSubtitle, 
-            isTablet && styles.sectionSubtitleTablet,
-            isLargeTablet && styles.sectionSubtitleLargeTablet
-          ]}>
-            Your emotional state is the foundation of growth
-          </Text>
-          
-          {/* Responsive Mood Selection */}
-          <View style={styles.moodContainer}>
-            {renderMoodOptions()}
-          </View>
-        </Animated.View>
-
-        {/* Decision Section with enhanced responsive design */}
-        <Animated.View entering={FadeInDown.delay(300)} style={[
-          styles.section, 
-          isTablet && styles.sectionTablet,
-          isLargeTablet && styles.sectionLargeTablet
-        ]}>
-          <View style={styles.sectionHeader}>
-            <Lightbulb size={isLargeTablet ? 28 : isTablet ? 24 : 20} color="#f59e0b" />
-            <Text style={[
-              styles.sectionTitle, 
-              isTablet && styles.sectionTitleTablet,
-              isLargeTablet && styles.sectionTitleLargeTablet
-            ]}>
-              Reflect on your day
-            </Text>
-          </View>
-          <Text style={[
-            styles.sectionSubtitle, 
-            isTablet && styles.sectionSubtitleTablet,
-            isLargeTablet && styles.sectionSubtitleLargeTablet
-          ]}>
-            What shaped your journey today?
-          </Text>
-          
-          <View style={[
-            styles.promptCard, 
-            isTablet && styles.promptCardTablet,
-            isLargeTablet && styles.promptCardLargeTablet
-          ]}>
-            <Text style={[
-              styles.promptText, 
-              isTablet && styles.promptTextTablet,
-              isLargeTablet && styles.promptTextLargeTablet
-            ]}>
-              💭 {currentPrompt}
-            </Text>
-          </View>
-          
-          <View style={styles.textInputContainer}>
-            <TextInput
-              style={[
-                styles.textInput, 
-                isTablet && styles.textInputTablet,
-                isLargeTablet && styles.textInputLargeTablet
-              ]}
-              multiline
-              numberOfLines={isLargeTablet ? 10 : isTablet ? 8 : 6}
-              placeholder="Share your thoughts, decisions, and reflections from today. What mattered most to you?"
-              placeholderTextColor="#9ca3af"
-              value={decision}
-              onChangeText={setDecision}
-              maxLength={1000}
-            />
-            <View style={styles.inputFooter}>
-              <View style={styles.characterCount}>
-                <Text style={[
-                  styles.characterCountText, 
-                  isTablet && styles.characterCountTextTablet,
-                  isLargeTablet && styles.characterCountTextLargeTablet
-                ]}>
-                  {decision.length}/1000
-                </Text>
-              </View>
-              <View style={[
-                styles.inputProgress,
-                decision.length > 0 && styles.inputProgressActive
-              ]}>
-                <View style={[
-                  styles.inputProgressBar,
-                  { width: `${Math.min((decision.length / 200) * 100, 100)}%` }
-                ]} />
-              </View>
-            </View>
-          </View>
-        </Animated.View>
-
-        {/* Enhanced Habits Section with responsive layout */}
-        <Animated.View entering={FadeInDown.delay(400)} style={[
-          styles.section, 
-          isTablet && styles.sectionTablet,
-          isLargeTablet && styles.sectionLargeTablet
-        ]}>
-          <View style={styles.sectionHeader}>
-            <Target size={isLargeTablet ? 28 : isTablet ? 24 : 20} color="#10b981" />
-            <Text style={[
-              styles.sectionTitle, 
-              isTablet && styles.sectionTitleTablet,
-              isLargeTablet && styles.sectionTitleLargeTablet
-            ]}>
-              Daily Habits
-            </Text>
-          </View>
-          <Text style={[
-            styles.sectionSubtitle, 
-            isTablet && styles.sectionSubtitleTablet,
-            isLargeTablet && styles.sectionSubtitleLargeTablet
-          ]}>
-            Building consistency <Text>•</Text> {completedHabits}/{defaultHabits.length} completed
-          </Text>
-          
-          <View style={[
-            styles.habitsGrid,
-            isLargeTablet && styles.habitsGridLargeTablet,
-            isTablet && styles.habitsGridTablet,
-            { gap: habitsLayout.gap }
-          ]}>
-            {defaultHabits.map((habit, index) => (
-              <Animated.View 
-                key={habit.name} 
-                entering={FadeInDown.delay(500 + index * 50)}
-                style={[
-                  isLargeTablet ? styles.habitItemLargeTablet : 
-                  isTablet ? styles.habitItemTablet : 
-                  styles.habitItemMobile
-                ]}
-              >
-                <TouchableOpacity
-                  style={[
-                    styles.habitOption,
-                    isLargeTablet && styles.habitOptionLargeTablet,
-                    isTablet && styles.habitOptionTablet,
-                    habits[habit.name] && [
-                      styles.habitOptionSelected,
-                      { borderColor: habit.color }
-                    ]
-                  ]}
-                  onPress={() => handleHabitPress(habit.name)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.habitContent}>
-                    <View style={[
-                      styles.habitIcon,
-                      isLargeTablet && styles.habitIconLargeTablet,
-                      isTablet && styles.habitIconTablet,
-                      habits[habit.name] && { backgroundColor: habit.color }
-                    ]}>
-                      <Text style={[
-                        styles.habitEmoji, 
-                        isLargeTablet && styles.habitEmojiLargeTablet,
-                        isTablet && styles.habitEmojiTablet
-                      ]}>
-                        {habit.icon}
-                      </Text>
-                    </View>
-                    <View style={styles.habitInfo}>
-                      <Text style={[
-                        styles.habitLabel,
-                        isLargeTablet && styles.habitLabelLargeTablet,
-                        isTablet && styles.habitLabelTablet,
-                        habits[habit.name] && { color: habit.color }
-                      ]}>
-                        {habit.name}
-                      </Text>
-                      <Text style={[
-                        styles.habitDescription, 
-                        isLargeTablet && styles.habitDescriptionLargeTablet,
-                        isTablet && styles.habitDescriptionTablet
-                      ]}>
-                        {habit.description}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={[
-                    styles.habitCheckbox,
-                    isLargeTablet && styles.habitCheckboxLargeTablet,
-                    isTablet && styles.habitCheckboxTablet,
-                    habits[habit.name] && [
-                      styles.habitCheckboxSelected,
-                      { backgroundColor: habit.color }
-                    ]
-                  ]}>
-                    {habits[habit.name] && (
-                      <Check size={isLargeTablet ? 24 : isTablet ? 20 : 16} color="#ffffff" />
-                    )}
-                  </View>
-                </TouchableOpacity>
-              </Animated.View>
-            ))}
-          </View>
-        </Animated.View>
-
-        {/* Enhanced Progress Summary */}
-        {(selectedMood || decision || completedHabits > 0) && (
-          <Animated.View entering={FadeInDown.delay(600)} style={[
-            styles.summarySection, 
-            isTablet && styles.summarySectionTablet,
-            isLargeTablet && styles.summarySectionLargeTablet
-          ]}>
-            <LinearGradient
-              colors={['#f0f9ff', '#e0f2fe']}
-              style={[
-                styles.summaryGradient, 
-                isTablet && styles.summaryGradientTablet,
-                isLargeTablet && styles.summaryGradientLargeTablet
-              ]}
-            >
-              <View style={styles.summaryHeader}>
-                <Sparkles size={isLargeTablet ? 28 : isTablet ? 24 : 20} color="#0ea5e9" />
-                <Text style={[
-                  styles.summaryTitle, 
-                  isTablet && styles.summaryTitleTablet,
-                  isLargeTablet && styles.summaryTitleLargeTablet
-                ]}>
-                  Today's Progress
-                </Text>
-                <View style={[
-                  styles.summaryBadge, 
-                  isTablet && styles.summaryBadgeTablet,
-                  isLargeTablet && styles.summaryBadgeLargeTablet
-                ]}>
-                  <Text style={[
-                    styles.summaryBadgeText, 
-                    isTablet && styles.summaryBadgeTextTablet,
-                    isLargeTablet && styles.summaryBadgeTextLargeTablet
-                  ]}>
-                    {Math.round(progress * 100)}%
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.summaryItems}>
-                {selectedMood && (
-                  <View style={styles.summaryItem}>
-                    <Text style={[
-                      styles.summaryItemIcon, 
-                      isTablet && styles.summaryItemIconTablet,
-                      isLargeTablet && styles.summaryItemIconLargeTablet
-                    ]}>
-                      🎯
-                    </Text>
-                    <Text style={[
-                      styles.summaryItemText, 
-                      isTablet && styles.summaryItemTextTablet,
-                      isLargeTablet && styles.summaryItemTextLargeTablet
-                    ]}>
-                      Mood: {selectedMoodData?.emoji} {selectedMoodData?.label}
-                    </Text>
-                  </View>
-                )}
-                {completedHabits > 0 && (
-                  <View style={styles.summaryItem}>
-                    <Text style={[
-                      styles.summaryItemIcon, 
-                      isTablet && styles.summaryItemIconTablet,
-                      isLargeTablet && styles.summaryItemIconLargeTablet
-                    ]}>
-                      ✅
-                    </Text>
-                    <Text style={[
-                      styles.summaryItemText, 
-                      isTablet && styles.summaryItemTextTablet,
-                      isLargeTablet && styles.summaryItemTextLargeTablet
-                    ]}>
-                      Completed {completedHabits} habit{completedHabits > 1 ? 's' : ''}
-                    </Text>
-                  </View>
-                )}
-                {decision && (
-                  <View style={styles.summaryItem}>
-                    <Text style={[
-                      styles.summaryItemIcon, 
-                      isTablet && styles.summaryItemIconTablet,
-                      isLargeTablet && styles.summaryItemIconLargeTablet
-                    ]}>
-                      💭
-                    </Text>
-                    <Text style={[
-                      styles.summaryItemText, 
-                      isTablet && styles.summaryItemTextTablet,
-                      isLargeTablet && styles.summaryItemTextLargeTablet
-                    ]}>
-                      Reflection documented ({decision.length} characters)
-                    </Text>
-                  </View>
-                )}
-              </View>
-            </LinearGradient>
-          </Animated.View>
-        )}
-
-        {/* Motivational Quote */}
-        <Animated.View entering={FadeInDown.delay(700)} style={[
-          styles.quoteSection, 
-          isTablet && styles.quoteSectionTablet,
-          isLargeTablet && styles.quoteSectionLargeTablet
-        ]}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        {/* Enhanced Header */}
+        <Animated.View entering={FadeInUp} style={styles.headerContainer}>
           <LinearGradient
-            colors={['#fef7ff', '#faf5ff']}
-            style={[
-              styles.quoteGradient, 
-              isTablet && styles.quoteGradientTablet,
-              isLargeTablet && styles.quoteGradientLargeTablet
-            ]}
+            colors={['#667eea', '#764ba2']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.headerGradient}
           >
-            <Text style={[
-              styles.quote, 
-              isTablet && styles.quoteTablet,
-              isLargeTablet && styles.quoteLargeTablet
-            ]}>
-              "The journey of a thousand miles begins with one step."
-            </Text>
-            <Text style={[
-              styles.quoteAuthor, 
-              isTablet && styles.quoteAuthorTablet,
-              isLargeTablet && styles.quoteAuthorLargeTablet
-            ]}>
-              - Lao Tzu
-            </Text>
+            <View style={styles.header}>
+              <TouchableOpacity onPress={() => router.back()} style={styles.closeButton}>
+                <X size={24} color="#ffffff" />
+              </TouchableOpacity>
+              <View style={styles.headerContent}>
+                <Text style={styles.headerTitle}>
+                  {isEditing ? 'Edit Today\'s Entry' : 'Today\'s Reflection'}
+                </Text>
+                <Text style={styles.headerDate}>
+                  {DateUtils.formatDisplayDate(todayDate)}
+                </Text>
+              </View>
+              <TouchableOpacity 
+                style={[styles.saveButton, (!canSave || loading) && styles.saveButtonDisabled]} 
+                onPress={handleSave}
+                disabled={!canSave || loading}
+              >
+                <Save size={20} color="#ffffff" />
+                <Text style={styles.saveButtonText}>
+                  {loading ? 'Saving...' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </LinearGradient>
         </Animated.View>
 
-        {/* Save Button */}
-        <Animated.View entering={FadeInDown.delay(800)} style={styles.saveSection}>
-          <TouchableOpacity 
-            style={[
-              styles.saveButtonLarge,
-              isTablet && styles.saveButtonLargeTablet,
-              isLargeTablet && styles.saveButtonLargeLargeTablet,
-              selectedMood && decision.trim() ? styles.saveButtonActive : null,
-              isSaving && styles.saveButtonDisabled
-            ]} 
-            onPress={handleSave}
-            disabled={isSaving}
-          >
-            <LinearGradient
-              colors={(selectedMood && decision.trim()) && !isSaving ? ['#667eea', '#764ba2'] : ['#9ca3af', '#6b7280']}
-              style={[
-                styles.saveButtonGradient, 
-                isTablet && styles.saveButtonGradientTablet,
-                isLargeTablet && styles.saveButtonGradientLargeTablet
-              ]}
-            >
-              <Check size={isLargeTablet ? 28 : isTablet ? 24 : 20} color="#ffffff" />
-              <Text style={[
-                styles.saveButtonText, 
-                isTablet && styles.saveButtonTextTablet,
-                isLargeTablet && styles.saveButtonTextLargeTablet
-              ]}>
-                {isSaving ? 'Saving...' : isEditing ? 'Update Entry' : 'Save Entry'}
+        {/* Mood Selection */}
+        <Animated.View entering={FadeInDown.delay(100)} style={styles.section}>
+          <Text style={styles.sectionTitle}>How are you feeling today?</Text>
+          <View style={styles.moodCard}>
+            <View style={styles.moodSelector}>
+              {moodEmojis.map((emoji, index) => {
+                const moodValue = index + 1;
+                const isSelected = mood === moodValue;
+                return (
+                  <TouchableOpacity
+                    key={index}
+                    style={[styles.moodOption, isSelected && styles.moodOptionSelected]}
+                    onPress={() => setMood(moodValue)}
+                  >
+                    <Text style={[styles.moodEmoji, isSelected && styles.moodEmojiSelected]}>
+                      {emoji}
+                    </Text>
+                    <Text style={[styles.moodLabel, isSelected && styles.moodLabelSelected]}>
+                      {moodLabels[index]}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <View style={styles.moodIndicator}>
+              <View style={styles.moodIndicatorTrack}>
+                <View 
+                  style={[
+                    styles.moodIndicatorFill,
+                    { width: `${(mood / 5) * 100}%` }
+                  ]} 
+                />
+              </View>
+              <Text style={styles.moodIndicatorText}>
+                {mood}/5 - {moodLabels[mood - 1]}
               </Text>
-            </LinearGradient>
-          </TouchableOpacity>
+            </View>
+          </View>
+        </Animated.View>
+
+        {/* Decision/Reflection Input */}
+        <Animated.View entering={SlideInRight.delay(200)} style={styles.section}>
+          <Text style={styles.sectionTitle}>What's on your mind today?</Text>
+          <View style={styles.decisionCard}>
+            <TextInput
+              style={styles.decisionInput}
+              placeholder="Share your thoughts, decisions, or reflections about today..."
+              placeholderTextColor="#9ca3af"
+              value={decision}
+              onChangeText={setDecision}
+              multiline
+              textAlignVertical="top"
+              maxLength={1000}
+            />
+            <View style={styles.decisionMeta}>
+              <Text style={styles.characterCount}>
+                {decision.length}/1000 characters
+              </Text>
+              {decision.length > 0 && (
+                <View style={styles.progressIndicator}>
+                  <View 
+                    style={[
+                      styles.progressBar,
+                      { width: `${(decision.length / 1000) * 100}%` }
+                    ]} 
+                  />
+                </View>
+              )}
+            </View>
+          </View>
+        </Animated.View>
+
+        {/* Habits Tracking */}
+        <Animated.View entering={FadeInDown.delay(300)} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Daily Habits</Text>
+            <View style={styles.habitsBadge}>
+              <Text style={styles.habitsBadgeText}>
+                {completedHabitsCount}/{defaultHabits.length}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.habitsCard}>
+            <View style={styles.habitsGrid}>
+              {defaultHabits.map((habit, index) => {
+                const isCompleted = habits[habit];
+                return (
+                  <Animated.View 
+                    key={habit} 
+                    entering={FadeInDown.delay(400 + index * 50)}
+                    style={styles.habitItemContainer}
+                  >
+                    <TouchableOpacity
+                      style={[styles.habitItem, isCompleted && styles.habitItemCompleted]}
+                      onPress={() => toggleHabit(habit)}
+                    >
+                      <View style={[styles.habitCheckbox, isCompleted && styles.habitCheckboxCompleted]}>
+                        {isCompleted && <Text style={styles.habitCheckmark}>✓</Text>}
+                      </View>
+                      <Text style={[styles.habitText, isCompleted && styles.habitTextCompleted]}>
+                        {habit}
+                      </Text>
+                    </TouchableOpacity>
+                  </Animated.View>
+                );
+              })}
+            </View>
+            
+            {completedHabitsCount > 0 && (
+              <View style={styles.habitsProgress}>
+                <View style={styles.habitsProgressBar}>
+                  <View 
+                    style={[
+                      styles.habitsProgressFill,
+                      { width: `${(completedHabitsCount / defaultHabits.length) * 100}%` }
+                    ]} 
+                  />
+                </View>
+                <Text style={styles.habitsProgressText}>
+                  {Math.round((completedHabitsCount / defaultHabits.length) * 100)}% complete
+                </Text>
+              </View>
+            )}
+          </View>
+        </Animated.View>
+
+        {/* Subscription Status */}
+        {subscription.plan === 'free' && (
+          <Animated.View entering={FadeInDown.delay(400)} style={styles.section}>
+            <View style={styles.subscriptionCard}>
+              <LinearGradient
+                colors={['#dbeafe', '#bfdbfe']}
+                style={styles.subscriptionGradient}
+              >
+                <View style={styles.subscriptionHeader}>
+                  <Sparkles size={20} color="#3b82f6" />
+                  <Text style={styles.subscriptionTitle}>LifeMap Free</Text>
+                </View>
+                <Text style={styles.subscriptionText}>
+                  {subscription.entriesThisMonth}/{subscription.maxEntriesPerMonth} entries used this month
+                </Text>
+                <View style={styles.subscriptionProgress}>
+                  <View 
+                    style={[
+                      styles.subscriptionProgressFill,
+                      { width: `${(subscription.entriesThisMonth / subscription.maxEntriesPerMonth) * 100}%` }
+                    ]} 
+                  />
+                </View>
+                <TouchableOpacity 
+                  style={styles.upgradeButton}
+                  onPress={() => router.push('/paywall')}
+                >
+                  <Text style={styles.upgradeButtonText}>Upgrade to Pro</Text>
+                  <Target size={16} color="#ffffff" />
+                </TouchableOpacity>
+              </LinearGradient>
+            </View>
+          </Animated.View>
+        )}
+
+        {/* Tips Section */}
+        <Animated.View entering={FadeInDown.delay(500)} style={styles.section}>
+          <View style={styles.tipsCard}>
+            <View style={styles.tipsHeader}>
+              <Heart size={20} color="#ef4444" />
+              <Text style={styles.tipsTitle}>Reflection Tips</Text>
+            </View>
+            <View style={styles.tipsList}>
+              <Text style={styles.tipItem}>• Be honest about your feelings and experiences</Text>
+              <Text style={styles.tipItem}>• Focus on what you learned or discovered today</Text>
+              <Text style={styles.tipItem}>• Note any decisions you made and why</Text>
+              <Text style={styles.tipItem}>• Celebrate small wins and progress</Text>
+            </View>
+          </View>
         </Animated.View>
       </ScrollView>
     </SafeAreaView>
@@ -977,30 +332,22 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f8fafc',
   },
+  scrollContent: {
+    paddingBottom: 32,
+  },
   headerContainer: {
     marginBottom: 24,
   },
   headerGradient: {
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 20,
-  },
-  headerTablet: {
-    paddingHorizontal: 40,
-    paddingTop: 24,
-    paddingBottom: 28,
-  },
-  headerLargeTablet: {
-    paddingHorizontal: 60,
-    paddingTop: 32,
-    paddingBottom: 36,
+    paddingVertical: 20,
   },
   closeButton: {
     width: 40,
@@ -1009,16 +356,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  buttonTablet: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-  },
-  buttonLargeTablet: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
   },
   headerContent: {
     flex: 1,
@@ -1029,764 +366,254 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-Bold',
     color: '#ffffff',
   },
-  headerTitleTablet: {
-    fontSize: 28,
-  },
-  headerTitleLargeTablet: {
-    fontSize: 36,
-  },
-  headerSubtitle: {
+  headerDate: {
     fontSize: 14,
     fontFamily: 'Inter-Regular',
     color: '#e2e8f0',
     marginTop: 4,
   },
-  headerSubtitleTablet: {
-    fontSize: 16,
-    marginTop: 6,
-  },
-  headerSubtitleLargeTablet: {
-    fontSize: 20,
-    marginTop: 8,
-  },
   saveButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    gap: 4,
   },
   saveButtonDisabled: {
     opacity: 0.6,
   },
-  progressContainer: {
-    paddingHorizontal: 24,
-    paddingBottom: 20,
-  },
-  progressContainerTablet: {
-    paddingHorizontal: 40,
-    paddingBottom: 28,
-  },
-  progressContainerLargeTablet: {
-    paddingHorizontal: 60,
-    paddingBottom: 36,
-  },
-  progressBar: {
-    height: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-    borderRadius: 3,
-    overflow: 'hidden',
-    marginBottom: 8,
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#ffffff',
-    borderRadius: 3,
-  },
-  progressInfo: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  progressText: {
-    fontSize: 12,
+  saveButtonText: {
+    fontSize: 14,
     fontFamily: 'Inter-SemiBold',
     color: '#ffffff',
   },
-  progressTextTablet: {
-    fontSize: 14,
-  },
-  progressTextLargeTablet: {
-    fontSize: 16,
-  },
-  progressSteps: {
-    fontSize: 12,
-    fontFamily: 'Inter-Regular',
-    color: '#e2e8f0',
-  },
-  progressStepsTablet: {
-    fontSize: 14,
-  },
-  progressStepsLargeTablet: {
-    fontSize: 16,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-  },
-  scrollContent: {
-    paddingBottom: 32,
-  },
-  scrollContentTablet: {
-    paddingHorizontal: 20,
-    paddingBottom: 48,
-    maxWidth: 800,
-    alignSelf: 'center',
-    width: '100%',
-  },
-  scrollContentLargeTablet: {
-    paddingHorizontal: 40,
-    paddingBottom: 64,
-    maxWidth: 1000,
-  },
   section: {
-    marginBottom: 32,
-  },
-  sectionTablet: {
-    marginBottom: 48,
-  },
-  sectionLargeTablet: {
-    marginBottom: 64,
+    marginBottom: 24,
   },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
-    gap: 8,
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    marginBottom: 16,
   },
   sectionTitle: {
     fontSize: 20,
     fontFamily: 'Inter-Bold',
     color: '#1e293b',
+    paddingHorizontal: 20,
+    marginBottom: 16,
   },
-  sectionTitleTablet: {
-    fontSize: 24,
+  moodCard: {
+    backgroundColor: '#ffffff',
+    marginHorizontal: 20,
+    borderRadius: 20,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
   },
-  sectionTitleLargeTablet: {
-    fontSize: 32,
-  },
-  sectionSubtitle: {
-    fontSize: 14,
-    fontFamily: 'Inter-Regular',
-    color: '#64748b',
+  moodSelector: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     marginBottom: 20,
   },
-  sectionSubtitleTablet: {
-    fontSize: 16,
-    marginBottom: 28,
-  },
-  sectionSubtitleLargeTablet: {
-    fontSize: 20,
-    marginBottom: 36,
-  },
-  promptCard: {
-    backgroundColor: '#fef7ff',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: '#8b5cf6',
-  },
-  promptCardTablet: {
-    borderRadius: 16,
-    padding: 24,
-    marginBottom: 24,
-  },
-  promptCardLargeTablet: {
-    borderRadius: 20,
-    padding: 32,
-    marginBottom: 32,
-  },
-  promptText: {
-    fontSize: 14,
-    fontFamily: 'Inter-Medium',
-    color: '#5b21b6',
-    lineHeight: 20,
-  },
-  promptTextTablet: {
-    fontSize: 16,
-    lineHeight: 24,
-  },
-  promptTextLargeTablet: {
-    fontSize: 20,
-    lineHeight: 30,
-  },
-  
-  // Enhanced Mood Selection Styles
-  moodContainer: {
-    width: '100%',
-  },
-  
-  // Single row layout for tablets
-  moodRowSingle: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  
-  // Grid layouts for different screen sizes
-  moodGridContainer: {
-    gap: 0, // Remove gap here, handle in individual rows
-  },
-  moodRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  moodRowCenter: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-  },
-  
-  moodOptionWrapper: {
-    alignItems: 'center',
-  },
   moodOption: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 16,
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#f1f5f9',
-    position: 'relative',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-    width: '100%',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  
-  // Tablet mood styles
-  moodOptionTablet: {
-    borderRadius: 20,
-    padding: 24,
-    minHeight: 180,
-  },
-  moodOptionLargeTablet: {
-    borderRadius: 24,
-    padding: 32,
-    minHeight: 200,
-  },
-  
-  // Small screen styles
-  moodOptionSmall: {
     padding: 12,
-    minHeight: 110,
-    borderRadius: 12,
+    borderRadius: 16,
+    backgroundColor: '#f8fafc',
+    borderWidth: 2,
+    borderColor: 'transparent',
+    flex: 1,
+    marginHorizontal: 2,
   },
-  
-  // Medium screen styles
-  moodOptionMedium: {
-    padding: 14,
-    minHeight: 130,
-    borderRadius: 14,
-  },
-  
   moodOptionSelected: {
-    transform: [{ scale: 1.02 }],
+    backgroundColor: '#eff6ff',
+    borderColor: '#3b82f6',
   },
-  
-  // Updated emoji styles for better cross-platform compatibility
-  moodEmojiSmall: {
+  moodEmoji: {
     fontSize: 24,
-    marginBottom: 4,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
-  },
-  moodEmojiMedium: {
-    fontSize: 28,
-    marginBottom: 6,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
-  },
-  moodEmojiTablet: {
-    fontSize: 48,
-    marginBottom: 12,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
-  },
-  moodEmojiLargeTablet: {
-    fontSize: 64,
-    marginBottom: 16,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
-  },
-  
-  // Label styles for different screen sizes
-  moodLabelSmall: {
-    fontSize: 10,
-    fontFamily: 'Inter-SemiBold',
-    color: '#64748b',
-    textAlign: 'center',
-    marginBottom: 2,
-  },
-  moodLabelMedium: {
-    fontSize: 11,
-    fontFamily: 'Inter-SemiBold',
-    color: '#64748b',
-    textAlign: 'center',
-    marginBottom: 3,
-  },
-  moodLabelTablet: {
-    fontSize: 16,
-    fontFamily: 'Inter-SemiBold',
-    color: '#64748b',
-    textAlign: 'center',
-    marginBottom: 6,
-  },
-  moodLabelLargeTablet: {
-    fontSize: 20,
-    fontFamily: 'Inter-SemiBold',
-    color: '#64748b',
-    textAlign: 'center',
     marginBottom: 8,
   },
-  
-  // Description styles for different screen sizes
-  moodDescriptionSmall: {
-    fontSize: 8,
-    fontFamily: 'Inter-Regular',
-    color: '#9ca3af',
-    textAlign: 'center',
-    lineHeight: 10,
+  moodEmojiSelected: {
+    transform: [{ scale: 1.2 }],
   },
-  moodDescriptionMedium: {
-    fontSize: 9,
-    fontFamily: 'Inter-Regular',
-    color: '#9ca3af',
-    textAlign: 'center',
-    lineHeight: 12,
-  },
-  moodDescriptionTablet: {
-    fontSize: 12,
-    fontFamily: 'Inter-Regular',
-    color: '#9ca3af',
+  moodLabel: {
+    fontSize: 10,
+    fontFamily: 'Inter-Medium',
+    color: '#64748b',
     textAlign: 'center',
   },
-  moodDescriptionLargeTablet: {
-    fontSize: 14,
-    fontFamily: 'Inter-Regular',
-    color: '#9ca3af',
-    textAlign: 'center',
+  moodLabelSelected: {
+    color: '#3b82f6',
+    fontFamily: 'Inter-SemiBold',
   },
-  
-  moodSelectedIndicator: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+  moodIndicator: {
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  moodSelectedIndicatorTablet: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    top: 12,
-    right: 12,
+  moodIndicatorTrack: {
+    width: '100%',
+    height: 8,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 8,
   },
-  moodSelectedIndicatorLargeTablet: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    top: 16,
-    right: 16,
+  moodIndicatorFill: {
+    height: '100%',
+    backgroundColor: '#3b82f6',
+    borderRadius: 4,
   },
-  
-  textInputContainer: {
-    position: 'relative',
+  moodIndicatorText: {
+    fontSize: 14,
+    fontFamily: 'Inter-SemiBold',
+    color: '#374151',
   },
-  textInput: {
+  decisionCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 20,
+    marginHorizontal: 20,
+    borderRadius: 20,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  decisionInput: {
     fontSize: 16,
     fontFamily: 'Inter-Regular',
     color: '#374151',
+    lineHeight: 24,
+    minHeight: 120,
     textAlignVertical: 'top',
-    borderWidth: 2,
-    borderColor: '#f1f5f9',
-    minHeight: 140,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
   },
-  textInputTablet: {
-    borderRadius: 20,
-    padding: 28,
-    fontSize: 18,
-    minHeight: 200,
-  },
-  textInputLargeTablet: {
-    borderRadius: 24,
-    padding: 36,
-    fontSize: 20,
-    minHeight: 240,
-  },
-  inputFooter: {
+  decisionMeta: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 8,
+    justifyContent: 'space-between',
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
   },
   characterCount: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 8,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-  },
-  characterCountText: {
     fontSize: 12,
     fontFamily: 'Inter-Regular',
-    color: '#64748b',
+    color: '#9ca3af',
   },
-  characterCountTextTablet: {
-    fontSize: 14,
-  },
-  characterCountTextLargeTablet: {
-    fontSize: 16,
-  },
-  inputProgress: {
+  progressIndicator: {
     width: 60,
     height: 4,
     backgroundColor: '#f1f5f9',
     borderRadius: 2,
     overflow: 'hidden',
   },
-  inputProgressActive: {
-    backgroundColor: '#e2e8f0',
-  },
-  inputProgressBar: {
+  progressBar: {
     height: '100%',
     backgroundColor: '#3b82f6',
     borderRadius: 2,
   },
-  habitsGrid: {
-    gap: 12,
-  },
-  habitsGridTablet: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  habitsGridLargeTablet: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  habitItemMobile: {
-    width: '100%',
-  },
-  habitItemTablet: {
-    width: '48%',
-  },
-  habitItemLargeTablet: {
-    width: '31%',
-  },
-  habitOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 2,
-    borderColor: '#f1f5f9',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  habitOptionTablet: {
-    borderRadius: 20,
-    padding: 20,
-  },
-  habitOptionLargeTablet: {
-    borderRadius: 24,
-    padding: 24,
-  },
-  habitOptionSelected: {
-    backgroundColor: '#fefefe',
-    transform: [{ scale: 1.01 }],
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 4,
-  },
-  habitContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  habitIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#f8fafc',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-    overflow: 'hidden',
-  },
-  habitIconTablet: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    marginRight: 16,
-  },
-  habitIconLargeTablet: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    marginRight: 20,
-  },
-  habitEmoji: {
-    fontSize: 20,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
-  },
-  habitEmojiTablet: {
-    fontSize: 24,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
-  },
-  habitEmojiLargeTablet: {
-    fontSize: 28,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
-  },
-  habitInfo: {
-    flex: 1,
-  },
-  habitLabel: {
-    fontSize: 16,
-    fontFamily: 'Inter-SemiBold',
-    color: '#374151',
-  },
-  habitLabelTablet: {
-    fontSize: 18,
-  },
-  habitLabelLargeTablet: {
-    fontSize: 20,
-  },
-  habitDescription: {
-    fontSize: 12,
-    fontFamily: 'Inter-Regular',
-    color: '#9ca3af',
-    marginTop: 2,
-  },
-  habitDescriptionTablet: {
-    fontSize: 14,
-    marginTop: 4,
-  },
-  habitDescriptionLargeTablet: {
-    fontSize: 16,
-    marginTop: 6,
-  },
-  habitCheckbox: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: '#d1d5db',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  habitCheckboxTablet: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-  },
-  habitCheckboxLargeTablet: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-  },
-  habitCheckboxSelected: {
-    borderColor: 'transparent',
-  },
-  summarySection: {
-    marginBottom: 32,
-    borderRadius: 20,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 4,
-  },
-  summarySectionTablet: {
-    marginBottom: 48,
-    borderRadius: 24,
-  },
-  summarySectionLargeTablet: {
-    marginBottom: 64,
-    borderRadius: 28,
-  },
-  summaryGradient: {
-    padding: 20,
-  },
-  summaryGradientTablet: {
-    padding: 28,
-  },
-  summaryGradientLargeTablet: {
-    padding: 36,
-  },
-  summaryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  summaryTitle: {
-    fontSize: 18,
-    fontFamily: 'Inter-Bold',
-    color: '#1e293b',
-    marginLeft: 8,
-    flex: 1,
-  },
-  summaryTitleTablet: {
-    fontSize: 22,
-    marginLeft: 12,
-  },
-  summaryTitleLargeTablet: {
-    fontSize: 26,
-    marginLeft: 16,
-  },
-  summaryBadge: {
-    backgroundColor: '#0ea5e9',
+  habitsBadge: {
+    backgroundColor: '#eff6ff',
     borderRadius: 12,
     paddingVertical: 4,
     paddingHorizontal: 8,
   },
-  summaryBadgeTablet: {
-    borderRadius: 14,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-  },
-  summaryBadgeLargeTablet: {
-    borderRadius: 16,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-  },
-  summaryBadgeText: {
+  habitsBadgeText: {
     fontSize: 12,
-    fontFamily: 'Inter-Bold',
-    color: '#ffffff',
+    fontFamily: 'Inter-SemiBold',
+    color: '#3b82f6',
   },
-  summaryBadgeTextTablet: {
-    fontSize: 14,
+  habitsCard: {
+    backgroundColor: '#ffffff',
+    marginHorizontal: 20,
+    borderRadius: 20,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
   },
-  summaryBadgeTextLargeTablet: {
-    fontSize: 16,
+  habitsGrid: {
+    gap: 12,
   },
-  summaryItems: {
-    gap: 8,
+  habitItemContainer: {
+    marginBottom: 4,
   },
-  summaryItem: {
+  habitItem: {
     flexDirection: 'row',
     alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
-  summaryItemIcon: {
-    fontSize: 16,
-    marginRight: 8,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
+  habitItemCompleted: {
+    backgroundColor: '#f0fdf4',
+    borderColor: '#22c55e',
   },
-  summaryItemIconTablet: {
-    fontSize: 20,
+  habitCheckbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#d1d5db',
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
+    backgroundColor: '#ffffff',
   },
-  summaryItemIconLargeTablet: {
-    fontSize: 24,
-    marginRight: 16,
-    textAlign: 'center',
-    includeFontPadding: false,
-    textAlignVertical: 'center',
+  habitCheckboxCompleted: {
+    backgroundColor: '#22c55e',
+    borderColor: '#22c55e',
   },
-  summaryItemText: {
+  habitCheckmark: {
     fontSize: 14,
+    color: '#ffffff',
+    fontFamily: 'Inter-Bold',
+  },
+  habitText: {
+    fontSize: 16,
     fontFamily: 'Inter-Medium',
     color: '#374151',
+    flex: 1,
   },
-  summaryItemTextTablet: {
-    fontSize: 16,
+  habitTextCompleted: {
+    color: '#166534',
   },
-  summaryItemTextLargeTablet: {
-    fontSize: 18,
-  },
-  quoteSection: {
-    marginBottom: 32,
-    borderRadius: 16,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  quoteSectionTablet: {
-    marginBottom: 48,
-    borderRadius: 20,
-  },
-  quoteSectionLargeTablet: {
-    marginBottom: 64,
-    borderRadius: 24,
-  },
-  quoteGradient: {
-    padding: 24,
+  habitsProgress: {
+    marginTop: 20,
     alignItems: 'center',
   },
-  quoteGradientTablet: {
-    padding: 32,
-  },
-  quoteGradientLargeTablet: {
-    padding: 40,
-  },
-  quote: {
-    fontSize: 16,
-    fontFamily: 'Inter-Medium',
-    color: '#5b21b6',
-    textAlign: 'center',
-    fontStyle: 'italic',
+  habitsProgressBar: {
+    width: '100%',
+    height: 8,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 4,
+    overflow: 'hidden',
     marginBottom: 8,
-    lineHeight: 24,
   },
-  quoteTablet: {
-    fontSize: 20,
-    lineHeight: 30,
-    marginBottom: 12,
+  habitsProgressFill: {
+    height: '100%',
+    backgroundColor: '#22c55e',
+    borderRadius: 4,
   },
-  quoteLargeTablet: {
-    fontSize: 24,
-    lineHeight: 36,
-    marginBottom: 16,
-  },
-  quoteAuthor: {
+  habitsProgressText: {
     fontSize: 14,
-    fontFamily: 'Inter-Regular',
-    color: '#8b5cf6',
+    fontFamily: 'Inter-SemiBold',
+    color: '#166534',
   },
-  quoteAuthorTablet: {
-    fontSize: 16,
-  },
-  quoteAuthorLargeTablet: {
-    fontSize: 18,
-  },
-  saveSection: {
-    marginBottom: 32,
-  },
-  saveButtonLarge: {
-    borderRadius: 16,
+  subscriptionCard: {
+    marginHorizontal: 20,
+    borderRadius: 20,
     overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
@@ -1794,40 +621,82 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 4,
   },
-  saveButtonLargeTablet: {
-    borderRadius: 20,
+  subscriptionGradient: {
+    padding: 20,
   },
-  saveButtonLargeLargeTablet: {
-    borderRadius: 24,
+  subscriptionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
   },
-  saveButtonActive: {
-    shadowColor: '#667eea',
-    shadowOpacity: 0.3,
+  subscriptionTitle: {
+    fontSize: 18,
+    fontFamily: 'Inter-Bold',
+    color: '#1e293b',
   },
-  saveButtonGradient: {
+  subscriptionText: {
+    fontSize: 14,
+    fontFamily: 'Inter-Regular',
+    color: '#64748b',
+    marginBottom: 12,
+  },
+  subscriptionProgress: {
+    height: 6,
+    backgroundColor: 'rgba(0, 0, 0, 0.1)',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  subscriptionProgressFill: {
+    height: '100%',
+    backgroundColor: '#3b82f6',
+    borderRadius: 3,
+  },
+  upgradeButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 18,
+    backgroundColor: '#3b82f6',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     gap: 8,
   },
-  saveButtonGradientTablet: {
-    padding: 24,
-    gap: 12,
-  },
-  saveButtonGradientLargeTablet: {
-    padding: 32,
-    gap: 16,
-  },
-  saveButtonText: {
-    fontSize: 18,
-    fontFamily: 'Inter-Bold',
+  upgradeButtonText: {
+    fontSize: 14,
+    fontFamily: 'Inter-SemiBold',
     color: '#ffffff',
   },
-  saveButtonTextTablet: {
-    fontSize: 22,
+  tipsCard: {
+    backgroundColor: '#ffffff',
+    marginHorizontal: 20,
+    borderRadius: 20,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  saveButtonTextLargeTablet: {
-    fontSize: 26,
+  tipsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
+  },
+  tipsTitle: {
+    fontSize: 16,
+    fontFamily: 'Inter-SemiBold',
+    color: '#1e293b',
+  },
+  tipsList: {
+    gap: 6,
+  },
+  tipItem: {
+    fontSize: 14,
+    fontFamily: 'Inter-Regular',
+    color: '#64748b',
+    lineHeight: 20,
   },
 });

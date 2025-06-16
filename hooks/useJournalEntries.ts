@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Database } from '@/types/database';
 import { useAuth } from './useAuth';
+import { DateUtils } from '@/lib/dateUtils';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 type JournalEntry = Database['public']['Tables']['journal_entries']['Row'];
@@ -173,13 +174,7 @@ export function useJournalEntries() {
   };
 
   const getWeeklySummary = () => {
-    const now = new Date();
-    const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
-    startOfWeek.setHours(0, 0, 0, 0);
-    
-    const thisWeekEntries = entries.filter(entry => 
-      new Date(entry.created_at) >= startOfWeek
-    );
+    const thisWeekEntries = entries.filter(entry => DateUtils.isThisWeek(entry.date));
 
     if (thisWeekEntries.length === 0) {
       return "No entries this week. Start journaling to get insights!";
